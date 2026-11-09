@@ -24,6 +24,8 @@ const PATHS: Record<string, string> = {
   arrow: 'M5 12h14M13 6l6 6-6 6',
   filter: 'M4 6h16M7 12h10M10 18h4',
   leaf: 'M20 4c0 9-6 14-12 14a6 6 0 0 1 0-12c3 0 5 1 7 3',
+  edit: 'M4 20h4l10-10-4-4L4 16zM14 6l4 4',
+  trash: 'M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6M14 11v6',
 };
 
 export function Icon({
