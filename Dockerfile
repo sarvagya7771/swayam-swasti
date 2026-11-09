@@ -7,7 +7,10 @@ RUN apk upgrade --no-cache
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
-COPY . .
+# Copy only application sources so the host node_modules never enters the image.
+COPY index.html vite.config.ts tsconfig.json ./
+COPY public ./public
+COPY src ./src
 RUN npm run build
 
 FROM node:26-alpine AS runtime
