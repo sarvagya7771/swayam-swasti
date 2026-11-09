@@ -1,172 +1,205 @@
 # Swayam Swasti Spirituality — Customer App
 
-A mobile-first customer app for Swayam Swasti Spirituality: premium purple/pink design,
-Google and email sign-in, profile and booking history, booking notifications, testimonial
-submission with admin approval, and spiritual guidance content.
+A production customer app for **Swayam Swasti Spirituality**: real accounts (Google + email),
+real database storage, booking history, an approved-testimonials community and a secure
+admin dashboard.
 
-> This app is **separate** from your existing Booking website and Admin Dashboard.
-> Nothing in those projects is modified. They connect to this app only through a shared
-> Supabase project — see [Connecting your existing apps](#connecting-your-existing-apps).
+> This is a **separate project** from your existing Booking website and Admin Dashboard.
+> Neither of those is modified by this repository. All three can share one Supabase project.
+
+Stack: React 18 + TypeScript + Vite, Supabase (Postgres + Auth + Row Level Security),
+no paid APIs, no subscriptions.
 
 ---
 
-## 1. Run it locally
+## 1. What you must provide (exact credentials)
 
-```bash
-npm install
-npm run dev          # http://127.0.0.1:3000
-```
+The app now refuses to run without a real database — there is **no demo mode and no
+`localStorage` fallback**. If the two variables below are missing, the app shows a
+setup screen instead of pretending to work.
 
-### Demo mode (no account, no credentials)
+### 1.1 Supabase values (2 values)
 
-With no `.env` file the app runs in **local demo mode**: every screen works, data is stored
-only in your browser's `localStorage`, and nothing is sent anywhere. The header shows a
-**Demo** badge and the home page explains the mode.
+Supabase dashboard → your project → **Project Settings → API**:
 
-Demo mode exists so you can click through the whole product before creating any accounts.
-It is clearly labelled and is **not** fake customer data — it starts empty.
+| Variable | Where to find it | Example |
+| --- | --- | --- |
+| `VITE_SUPABASE_URL` | “Project URL” | `https://abcdefghijkl.supabase.co` |
+| `VITE_SUPABASE_ANON_KEY` | “Project API keys → anon / public” | `eyJhbGciOiJIUzI1NiIs...` |
 
-You can switch the demo account between customer and admin from the banner at the top of
-the app, which lets you walk the full testimonial approval flow:
+⚠️ Use the **anon / publishable** key only. Never put the `service_role` / secret key in
+this app: every `VITE_` variable is bundled into public JavaScript.
 
-1. Register a demo account → submit a testimonial on **Community**.
-2. Switch to **Admin** in the demo banner → open **Admin** → approve the testimonial.
-3. Switch back to **Customer** → the testimonial is now published.
+Copy `.env.example` to `.env` and fill both values for local development. For hosting, add
+the same two names in **Settings → Environment**.
 
-## 2. Connect a real backend (Supabase — free tier)
+### 1.2 Google Sign-In (free, ~10 minutes)
+
+Google Sign-In needs an OAuth client **and** a matching Supabase provider entry. Both are free.
+
+1. **Supabase → Authentication → Providers → Google**: enable it. It shows a
+   **Callback URL** — copy it, it looks like
+   `https://<your-project-ref>.supabase.co/auth/v1/callback`.
+2. **Google Cloud Console** (https://console.cloud.google.com) → create a project (or reuse
+   one) → **APIs & Services → OAuth consent screen**:
+   - User type: **External**, publishing status may stay in *Testing* while you develop.
+   - App name: `Swayam Swasti Spirituality`; add your support email.
+   - Scopes: only `userinfo.email`, `userinfo.profile`, `openid`.
+   - While in *Testing*, add each Google account that may sign in under **Test users**
+     (max 100). Press **Publish app** when you go live.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID**:
+   - Application type: **Web application**
+   - **Authorised JavaScript origins**:
+     - `http://localhost:5173` (local dev)
+     - your deployed origin, e.g. `https://your-app-url` (no trailing slash)
+   - **Authorised redirect URIs**: paste the Supabase callback URL from step 1.
+4. Copy the generated **Client ID** and **Client secret** into
+   **Supabase → Authentication → Providers → Google**, then **Save**.
+
+You do **not** need the Google client ID/secret in this repository — Supabase stores them and
+performs the token exchange.
+
+### 1.3 Redirect URLs (required for Google + email links)
+
+**Supabase → Authentication → URL Configuration**:
+
+- **Site URL**: your deployed app URL (or `http://localhost:5173` while developing).
+- **Additional Redirect URLs**:
+  - `http://localhost:5173/auth/callback`
+  - `https://your-app-url/auth/callback`
+  - `https://your-app-url/reset-password`
+
+The app sends every OAuth/confirmation link to `/auth/callback` and password-recovery links
+to `/reset-password`.
+
+### 1.4 Email delivery
+
+Supabase's built-in email sender is free but rate-limited (a few messages per hour) and best
+for testing. For production volume, connect a free SMTP provider (e.g. Brevo/Resend free tier)
+in **Authentication → Emails → SMTP Settings**. Until then, keep
+**Authentication → Providers → Email → “Confirm email”** on and expect slow confirmation
+emails; you can also disable confirmation while testing.
+
+---
+
+## 2. Database setup
 
 1. Create a free project at [supabase.com](https://supabase.com) (no card required).
-2. Open **SQL Editor** and run `supabase/schema.sql`. This creates every table,
-   enables Row Level Security, and installs the triggers that
-   create profiles, notify customers when a booking changes, and force new
-   testimonials to `pending`.
-3. Optionally run `supabase/seed.sql` for starter service and guidance copy
-   (owner copy — replace it with your own).
-4. Copy `.env.example` to `.env` and fill in:
+2. **SQL Editor → New query** → paste all of `supabase/schema.sql` → **Run**.
+   This creates every table, index, trigger, Row Level Security policy and the
+   `is_admin()` helper. It is idempotent — safe to re-run.
+3. If you previously ran an older version of the schema, also run
+   `supabase/migrations/20261109_admin_management.sql` (adds admin-authored testimonials
+   and admin notification deletion).
+4. Optionally run `supabase/seed.sql` for the real service descriptions and guidance
+   articles (service names, durations and prices — no customer data).
+5. Start the app: `npm install && npm run dev`.
 
-```env
-VITE_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
-VITE_SUPABASE_ANON_KEY=your-public-anon-key
-```
+### Make yourself an admin (one time)
 
-5. Enable **Google** sign-in in Authentication → Providers, and add your app URL
-   (and `http://127.0.0.1:3000`) to Authentication → URL Configuration.
-6. Restart the dev server. The Demo badge disappears and all data now lives in Supabase.
-
-**Only the `anon` (public) key belongs in this app.** Row Level Security is what protects
-the data. The `service_role` key bypasses every policy and must never be shipped to a
-browser.
-
-### Make yourself an admin
-
-Register normally, then run once in the SQL editor:
+Register normally in the app, then run in the SQL editor:
 
 ```sql
 update public.profiles set role = 'admin' where email = 'you@example.com';
 ```
 
-The **Admin** tab appears for that account only.
+Sign out and back in; the **Admin** tab appears. Role changes are blocked for everyone
+except existing admins by a database trigger, so a customer cannot promote themselves even
+by calling the API directly.
 
-## 3. Connecting your existing apps
+### What is actually enforced (not just hidden)
 
-You said not to modify your Booking website or Admin Dashboard, so nothing here requires
-it. When you are ready, connect them with these patterns.
+| Rule | Enforced by |
+| --- | --- |
+| Customers see only their own profile, bookings, notifications | RLS `select` policies on `auth.uid()` |
+| Only approved testimonials are public | RLS on `testimonials.status = 'approved'` |
+| Customers cannot self-approve or set their own role | `guard_testimonial` / `guard_profile_role` triggers |
+| Admin actions require `role = 'admin'` | `public.is_admin()` inside every write policy |
+| Booking status changes notify the customer | `notify_booking_change` trigger → `notifications` |
+| Admin panel access | UI guard + the RLS policies above (the UI guard alone is never trusted) |
 
-### Shared identity
+---
 
-Both apps use the **same Supabase project**, so `auth.users.id` is the same person
-everywhere. The customer app reads the profile row that Supabase creates automatically.
+## 3. Admin dashboard (`/admin`)
 
-### Booking website → customer app (recommended: server-side)
+Available only to accounts with `role = 'admin'`.
 
-Your booking site should write bookings **server-side** using the `service_role` key
-(kept only on your server, never in a browser bundle), or from an Edge Function:
+- **Testimonials** — create, edit, approve, reject (with a note) and delete. Filter by
+  pending / approved / rejected / all. Customer submissions always arrive as `pending` with
+  a first-name-only display name derived server-side.
+- **Customers** — search-free list with booking and testimonial counts; edit name, phone and
+  role; message a customer directly.
+- **Bookings** — update status (pending, confirmed, completed, cancelled, rescheduled) or
+  reschedule; deleting removes the record.
+- **Notifications** — send a message to any customer, review delivery/read state, delete.
 
-```ts
-// server-side only — booking website
+Every write is a real `update`/`insert`/`delete` against Postgres, authorised by RLS.
+
+---
+
+## 4. Design system
+
+Light, calm and premium: white surfaces, soft blush pink (`--blush-*`) and lavender
+(`--lav-*`) accents, subtle gradients only on hero and primary buttons, generous spacing.
+Motion is transform/opacity based (GPU-friendly, no animation library), with staggered card
+reveals, animated route transitions, shimmer skeletons, spring-like button presses and a
+respectful `prefers-reduced-motion: reduce` path that disables movement for users who ask
+for it. All tokens live at the top of `src/styles/global.css`.
+
+---
+
+## 5. Connecting your existing apps (unchanged, optional)
+
+Your Booking website and Admin Dashboard stay exactly as they are. If you later want them to
+share data with this app, point them at the **same Supabase project** and use the service
+role key **only on their server**, never in this browser app:
+
+```js
+// server-side only (booking site backend)
 await supabaseAdmin.from('bookings').insert({
-  user_id: customerProfileId,      // resolved from the customer's email
-  service_name: 'Vedic astrology reading',
-  scheduled_at: '2026-03-14T10:00:00Z',
-  status: 'confirmed',
-  reference: 'SS-2026-0142',
+  user_id: customerId,
+  service_name: 'Pendulum Guidance & Training',
+  scheduled_at: '2026-12-01T10:00:00Z',
+  status: 'pending',
+  reference: 'SS-2026-1042',
 });
 ```
 
-The `bookings_notify` trigger then inserts a row into `notifications` automatically, and
-the customer sees *“Booking confirmed”* in the app. Status changes (`confirmed`,
-`cancelled`, `rescheduled`, `completed`) notify the customer the same way — no extra code.
+The `notify_booking_change` trigger then creates the customer's in-app notification
+automatically. Rows inserted with the service role are trusted, so validate input in your
+own server code.
 
-**Finding the customer by email** (server-side):
+Shared identity: both apps use the same Supabase project, so `auth.users.id` is the same
+person everywhere, and this app reads the profile row Supabase creates on first sign-in.
 
-```sql
-select id from public.profiles where lower(email) = lower($1);
-```
+---
 
-If they have not signed up yet, invite them by email; their profile is created on first
-sign-in and you can back-fill `bookings.user_id` then.
-
-### Admin Dashboard → customer app
-
-- Read submissions with the dashboard's **own** authenticated admin session and RLS, or
-  server-side with `service_role`.
-- Approving a testimonial is one update:
-
-```ts
-await supabaseAdmin
-  .from('testimonials')
-  .update({ status: 'approved' })
-  .eq('id', testimonialId);
-```
-
-The `testimonials_guard` trigger stamps `reviewed_by` and `reviewed_at`, and the
-testimonial becomes publicly readable. Set `status: 'rejected'` with an optional
-`admin_note` to decline.
-
-- Never let the dashboard write `author_name` or `status` on a customer's behalf outside
-  an authenticated admin session — the trigger rejects it otherwise.
-
-### What stays private
-
-| Data | Customer | Public | Admin |
-| --- | --- | --- | --- |
-| Own profile | read / update (not `role`) | – | read all |
-| Bookings | own only | – | read / write |
-| Testimonials | own submissions | approved only | read / approve / delete |
-| Notifications | own only | – | read |
-
-## 4. Deploy
-
-The app is a static build served on port **3000** (`npm run build` → `dist`).
-Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as environment variables at build
-time, then add your deployed URL to Supabase → Authentication → URL Configuration →
-Redirect URLs (`https://your-app-url/auth/callback`).
-
-> Without those variables the deployed site runs in demo mode, which is safe to preview
-> but stores data per-browser.
-
-## 5. Project structure
+## 6. Project structure
 
 ```
 src/
-  components/    Layout, bottom navigation, UI primitives, toasts, route guards
-  context/       AuthContext (session + profile)
-  lib/           backend interface, Supabase + demo implementations, validation, format
-  pages/         Home, Services, Guidance, Testimonials, Bookings, Notifications,
-                 Profile, Login, Signup, AuthCallback, Admin, NotFound
-  styles/        global.css — the purple/pink design system
-supabase/        schema.sql (tables, RLS, triggers), seed.sql (starter copy)
+  lib/           config.ts (env), backend.ts (interface), supabaseBackend.ts (implementation),
+                 types.ts, validation.ts, format.ts, starterContent.ts
+  context/       AuthContext.tsx (session + profile + role)
+  components/    Layout, RequireAuth, Modal, Toast, ui.tsx (icons, cards, pills, fields)
+  pages/         Home, Services, Guidance, GuidanceArticle, Testimonials, Bookings,
+                 Notifications, Profile, Login, Signup, AuthCallback, ResetPassword,
+                 Setup, Admin, NotFound
+  styles/        global.css (design tokens, animation layer)
+supabase/        schema.sql, seed.sql, migrations/
+server.mjs       production static server (SPA fallback, port 3000)
 ```
 
-## 6. Source export
+## 7. Checks
 
-The complete source is in this repository — clone it, or use GitHub's
-**Code → Download ZIP**. No build step is required to read it, and `npm install &&
-npm run build` reproduces the deployed bundle exactly.
+```bash
+npm run build     # tsc --noEmit + vite build
+npm test          # vitest unit tests (validation + privacy helpers)
+```
 
 ## Notes on scope
 
-- No paid APIs, no subscriptions, no paid credits. Supabase's free tier and Google
-  OAuth are sufficient.
-- No fake customer data is bundled. Demo mode starts empty and is labelled as a demo.
-- Automated checks: `npm run typecheck`, `npm run build`, `npm test`.
+- No paid APIs, subscriptions or credits. Supabase free tier + Google OAuth free tier.
+- No fake customer data is bundled. The app starts empty and shows only rows that exist in
+  your database.
+- Source export: the repository is the full source — clone it, or download it from GitHub.
