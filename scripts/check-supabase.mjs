@@ -209,14 +209,69 @@ async function probe(path, label, expectTable) {
   }
 }
 
+const REQUIRED_TABLES = [
+  'profiles',
+  'services',
+  'bookings',
+  'testimonials',
+  'notifications',
+  'guidance_articles',
+];
+
+/**
+ * One request to PostgREST's OpenAPI root lists every table the API can see,
+ * which is enough to tell whether the schema was applied without querying
+ * each table separately.
+ */
+async function listTables() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(`${url}/rest/v1/`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const parsed = JSON.parse(await response.text());
+    const definitions = parsed?.definitions ?? parsed?.components?.schemas ?? null;
+    if (!definitions || typeof definitions !== 'object') return null;
+    return new Set(Object.keys(definitions));
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 if (urlUsable && keyUsable) {
   console.log('\nLive connection');
   console.log('──────────────────────────────────────────────');
   const auth = await probe('/auth/v1/health', 'Auth endpoint reachable');
-  const table = await probe('/rest/v1/profiles?select=id&limit=1', 'Database schema applied', 'profiles');
+
+  const tables = await listTables();
+  let schemaOk = false;
+
+  if (!tables) {
+    // Fall back to a direct read when the OpenAPI root is not exposed.
+    const fallback = await probe('/rest/v1/profiles?select=id&limit=1', 'Database schema applied', 'profiles');
+    schemaOk = fallback.ok;
+  } else {
+    const present = REQUIRED_TABLES.filter((table) => tables.has(table));
+    const missing = REQUIRED_TABLES.filter((table) => !tables.has(table));
+    if (missing.length === 0) {
+      console.log(`  ok    Database schema applied: all ${REQUIRED_TABLES.length} tables present.`);
+      schemaOk = true;
+    } else if (present.length === 0) {
+      console.log(`  FAIL  Database schema applied: none of the ${REQUIRED_TABLES.length} required tables exist yet.`);
+      console.log('        → Run supabase/schema.sql in the Supabase SQL Editor (README section 2).');
+    } else {
+      console.log(`  FAIL  Database schema incomplete — missing: ${missing.join(', ')}.`);
+      console.log('        → Re-run supabase/schema.sql (it is idempotent) in the Supabase SQL Editor.');
+    }
+  }
 
   console.log('');
-  if (auth.ok && table.ok) {
+  if (auth.ok && schemaOk) {
     console.log('RESULT: configuration is valid and the database schema is in place.');
     console.log('Next: configure Google in Supabase → Authentication → Providers (README step 3).');
     process.exit(0);
