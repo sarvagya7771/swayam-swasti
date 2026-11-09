@@ -80,6 +80,55 @@ in **Authentication → Emails → SMTP Settings**. Until then, keep
 **Authentication → Providers → Email → “Confirm email”** on and expect slow confirmation
 emails; you can also disable confirmation while testing.
 
+### 1.5 Where to enter the two values, and how to verify them
+
+**For the hosted app:** open this project's **Settings → Environment Variables**
+(the gear/settings icon in the AppJet chat header — it is *not* inside the repository,
+so nothing secret is ever committed to GitHub). Add exactly two rows:
+
+| Name | Value |
+| --- | --- |
+| `VITE_SUPABASE_URL` | `https://<project-ref>.supabase.co` |
+| `VITE_SUPABASE_ANON_KEY` | the **Publishable** key (`sb_publishable_…` or the legacy `eyJ…` anon key) |
+
+Type the *value* in the value field — a very common slip is pasting the variable
+**name** into the **value** column, which makes the app show the setup screen.
+
+**For local development:** create `.env.local` in the project root (already
+git-ignored — `.env`, `.env.local` and `*.local` never reach GitHub):
+
+```bash
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=sb_publishable_your_key_here
+```
+
+**Then verify — no deployment needed:**
+
+```bash
+npm run check:env
+```
+
+The checker validates the URL shape, accepts `sb_publishable_…` or a legacy anon JWT,
+**refuses a `service_role` / `sb_secret_` key**, cross-checks that the key's project ref
+matches the URL, then calls the Auth health endpoint and reads `public.profiles` to
+confirm the schema is installed. Exit code `0` means usable; `1` means fix the listed
+problems. The key is always masked in its output.
+
+Common results:
+
+| Message | Meaning / fix |
+| --- | --- |
+| `contains the text "VITE_SUPABASE_ANON_KEY"` | The variable name was pasted as the value. Replace with the real URL. |
+| `is missing` | No row with that exact name in Settings → Environment Variables. |
+| `looks like a SECRET key` | You pasted `service_role`/`sb_secret_`. Remove it immediately and use the Publishable key. |
+| `belongs to project "x" but … points at "y"` | URL and key come from two different Supabase projects. |
+| `the table "public.profiles" is missing` | Connection is fine; run `supabase/schema.sql` (section 2). |
+
+`VITE_` variables are compiled into the browser bundle when the app is built, so after
+changing a value the app must be rebuilt/redeployed to pick it up. The Publishable key is
+*safe* to expose — every table is guarded by Row Level Security. The `service_role` key is
+**not** safe and must never appear in this project.
+
 ---
 
 ## 2. Database setup
