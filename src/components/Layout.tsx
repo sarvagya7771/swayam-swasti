@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getBackend, isDemoBackend } from '../lib/backend';
+import { getBackend } from '../lib/backend';
 import { Avatar, Brand, Icon } from './ui';
 
 const NAV = [
@@ -16,7 +16,6 @@ export function Layout() {
   const { profile } = useAuth();
   const location = useLocation();
   const [unread, setUnread] = useState(0);
-  const demo = isDemoBackend();
 
   useEffect(() => {
     if (!profile) {
@@ -46,13 +45,16 @@ export function Layout() {
           </Link>
 
           <div className="header-actions">
-            {demo && <span className="badge badge-gold nowrap hidden-mobile">Demo mode</span>}
             {profile?.role === 'admin' && (
-              <Link className="icon-btn" to="/admin" aria-label="Admin console" title="Admin console">
+              <Link className="icon-btn" to="/admin" aria-label="Admin dashboard" title="Admin dashboard">
                 <Icon name="shield" size={20} />
               </Link>
             )}
-            <Link className="icon-btn" to="/notifications" aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`}>
+            <Link
+              className="icon-btn"
+              to="/notifications"
+              aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`}
+            >
               <Icon name="bell" size={20} />
               {unread > 0 && <span className="unread-dot" aria-hidden="true" />}
             </Link>
@@ -70,14 +72,18 @@ export function Layout() {
       </header>
 
       <main className="container" style={{ paddingTop: 20, paddingBottom: 32 }}>
-        <Outlet />
+        {/* Keyed wrapper: each route change replays the entrance animation. */}
+        <div className="page" key={location.pathname}>
+          <Outlet />
+        </div>
       </main>
 
       <footer className="footer">
         <div className="container footer-inner">
           <Brand compact />
           <p className="tiny muted">
-            Guidance for reflection and wellbeing — not a substitute for medical, legal or financial advice.
+            Guidance for reflection and wellbeing — not a substitute for medical, legal or financial
+            advice.
           </p>
           <div className="footer-links">
             <Link to="/services">Services</Link>
