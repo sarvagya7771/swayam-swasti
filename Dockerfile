@@ -1,14 +1,22 @@
+# Swayam Swasti Spirituality — customer app
+# Multi-stage build: compile the Vite bundle, then serve it from a small
+# dependency-free Node server that supports SPA deep links on port 3000.
+
 FROM node:26-alpine AS build
 RUN apk upgrade --no-cache
 WORKDIR /app
-COPY package*.json ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
-FROM python:3-alpine
+
+FROM node:26-alpine AS runtime
 RUN apk upgrade --no-cache
 WORKDIR /app
-COPY --from=build /app/dist ./
+ENV NODE_ENV=production
 ENV PORT=3000
+COPY --from=build /app/dist ./dist
+COPY server.mjs ./server.mjs
 EXPOSE 3000
-CMD python3 -m http.server "$PORT" --bind 0.0.0.0
+USER node
+CMD ["node", "server.mjs"]
