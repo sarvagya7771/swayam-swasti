@@ -1,0 +1,25 @@
+{
+  "name": "Swayam Swasti — Spiritual Guidance",
+  "short_name": "Swayam Swasti",
+  "description": "Your personal space for spiritual guidance, session bookings and community reflections.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0c0514",
+  "theme_color": "#0c0514",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
