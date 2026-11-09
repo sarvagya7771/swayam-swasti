@@ -14,7 +14,11 @@ COPY src ./src
 RUN npm run build
 
 FROM node:26-alpine AS runtime
-RUN apk upgrade --no-cache
+# Refresh OS packages and explicitly upgrade zlib so the final image carries the
+# patched build (ALPINE-CVE-2026-4738: 1.3.2-r1 -> 1.4-r0) rather than the copy
+# shipped in the base layer.
+RUN apk upgrade --no-cache \
+ && apk add --no-cache --upgrade 'zlib>=1.4-r0'
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
