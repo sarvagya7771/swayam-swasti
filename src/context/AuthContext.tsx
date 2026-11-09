@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { getBackend } from '../lib/backend';
+import { isSupabaseConfigured } from '../lib/config';
 import type { Profile } from '../lib/types';
 
 interface AuthContextValue {
@@ -25,14 +26,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setLoading(false);
+      return;
+    }
+
     const backend = getBackend();
     let active = true;
 
     backend
       .getSession()
       .then((next) => {
-        if (!active) return;
-        setProfile(next);
+        if (active) setProfile(next);
       })
       .catch(() => {
         /* a failed session probe means "signed out" */
@@ -42,7 +47,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
     const unsubscribe = backend.onAuthStateChange((next) => {
-      if (active) setProfile(next);
+      if (!active) return;
+      setProfile(next);
+      setLoading(false);
     });
 
     return () => {
@@ -52,6 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refresh = useCallback(async () => {
+    if (!isSupabaseConfigured) return;
     setProfile(await getBackend().getSession());
   }, []);
 
