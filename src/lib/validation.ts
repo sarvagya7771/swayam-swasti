@@ -60,7 +60,7 @@ export interface TestimonialInput {
   content: string;
 }
 
-export type FieldErrors = Record<string, string>;
+export type FieldErrors = Record<string, string | null>;
 
 export function validateTestimonial(input: TestimonialInput): FieldErrors {
   const errors: FieldErrors = {};
@@ -80,7 +80,7 @@ export function validateTestimonial(input: TestimonialInput): FieldErrors {
 }
 
 export function hasErrors(errors: FieldErrors): boolean {
-  return Object.keys(errors).length > 0;
+  return Object.values(errors).some((value) => typeof value === 'string' && value.trim() !== '');
 }
 
 /**

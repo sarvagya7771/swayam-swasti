@@ -148,12 +148,12 @@ export default function Home() {
             {(services.data ?? []).slice(0, 3).map((service) => (
               <article className="card service-card" key={service.id}>
                 <div className="service-icon">
-                  <Icon name={service.icon || 'sparkle'} size={20} />
+                  <Icon name="sparkle" size={20} />
                 </div>
-                <h3 className="h3">{service.name}</h3>
-                <p className="small muted">{service.description}</p>
+                <h3 className="h3">{service.title}</h3>
+                <p className="small muted">{service.summary || service.description}</p>
                 <div className="row-wrap between mt-8">
-                  <span className="badge badge-neutral">{service.durationMinutes} min</span>
+                  <span className="badge badge-neutral">{service.duration}</span>
                   {service.priceLabel && <span className="tiny muted">{service.priceLabel}</span>}
                 </div>
               </article>

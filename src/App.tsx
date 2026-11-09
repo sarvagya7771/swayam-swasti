@@ -18,9 +18,9 @@ import Testimonials from './pages/Testimonials';
 
 function ScrollToTop() {
   const { pathname } = useLocation();
-  if (typeof window !== 'undefined') {
+  useEffect(() => {
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
-  }
+  }, [pathname]);
   return null;
 }
 

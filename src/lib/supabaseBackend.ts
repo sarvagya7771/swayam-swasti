@@ -7,11 +7,9 @@ import type {
   AppNotification,
   Booking,
   BookingStatus,
-  GuidanceArticle,
   NotificationType,
   Profile,
   Role,
-  Service,
   Testimonial,
   TestimonialStatus,
 } from './types';
