@@ -1,12 +1,14 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { config } from './config';
+import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
+import { config, redirectUrl } from './config';
 import type { Backend } from './backend';
 import type {
   AdminCustomer,
+  AdminNotification,
   AppNotification,
   Booking,
   BookingStatus,
   GuidanceArticle,
+  NotificationType,
   Profile,
   Role,
   Service,
@@ -14,14 +16,7 @@ import type {
   TestimonialStatus,
 } from './types';
 
-/**
- * Supabase backend.
- *
- * Uses only the public anon key. Every table is protected by Row Level
- * Security (see `supabase/schema.sql`), so the browser can never read another
- * customer's rows or approve its own testimonial. Admin capability is decided
- * by the `profiles.role` column and enforced inside Postgres, not in this file.
- */
+/* ------------------------------------------------------------- row shapes -- */
 
 interface ProfileRow {
   id: string;
@@ -35,12 +30,12 @@ interface ProfileRow {
 interface BookingRow {
   id: string;
   user_id: string | null;
-  customer_name: string | null;
-  customer_email: string | null;
   service_name: string | null;
   scheduled_at: string | null;
   status: string | null;
   reference: string | null;
+  notes: string | null;
+  profiles?: { full_name: string | null; email: string | null } | { full_name: string | null; email: string | null }[] | null;
 }
 
 interface TestimonialRow {
@@ -56,11 +51,13 @@ interface TestimonialRow {
 
 interface NotificationRow {
   id: string;
+  user_id: string | null;
+  type: string | null;
   title: string | null;
   body: string | null;
-  type: string | null;
-  read_at: string | null;
+  read: boolean | null;
   created_at: string | null;
+  profiles?: { full_name: string | null; email: string | null } | { full_name: string | null; email: string | null }[] | null;
 }
 
 interface ServiceRow {
@@ -84,16 +81,72 @@ interface GuidanceRow {
   read_minutes: number | null;
 }
 
+/* ------------------------------------------------------------------ utils -- */
+
 const BOOKING_STATUSES: BookingStatus[] = ['pending', 'confirmed', 'completed', 'cancelled', 'rescheduled'];
 const TESTIMONIAL_STATUSES: TestimonialStatus[] = ['pending', 'approved', 'rejected'];
+const NOTIFICATION_TYPES: NotificationType[] = ['booking', 'testimonial', 'system'];
 
-const toBookingStatus = (value: string | null): BookingStatus =>
+const asBookingStatus = (value: string | null): BookingStatus =>
   BOOKING_STATUSES.includes(value as BookingStatus) ? (value as BookingStatus) : 'pending';
 
-const toTestimonialStatus = (value: string | null): TestimonialStatus =>
+const asTestimonialStatus = (value: string | null): TestimonialStatus =>
   TESTIMONIAL_STATUSES.includes(value as TestimonialStatus) ? (value as TestimonialStatus) : 'pending';
 
-const toRole = (value: string | null): Role => (value === 'admin' ? 'admin' : 'customer');
+const asNotificationType = (value: string | null): NotificationType =>
+  NOTIFICATION_TYPES.includes(value as NotificationType) ? (value as NotificationType) : 'system';
+
+const asRole = (value: string | null): Role => (value === 'admin' ? 'admin' : 'customer');
+
+const embedded = (
+  value: BookingRow['profiles'],
+): { full_name: string | null; email: string | null } | null =>
+  Array.isArray(value) ? value[0] ?? null : value ?? null;
+
+const toProfile = (row: ProfileRow): Profile => ({
+  id: row.id,
+  email: row.email ?? '',
+  fullName: row.full_name ?? '',
+  phone: row.phone ?? '',
+  role: asRole(row.role),
+  createdAt: row.created_at ?? new Date().toISOString(),
+});
+
+const toBooking = (row: BookingRow): Booking => {
+  const customer = embedded(row.profiles);
+  return {
+    id: row.id,
+    serviceName: row.service_name ?? 'Consultation',
+    scheduledAt: row.scheduled_at ?? '',
+    status: asBookingStatus(row.status),
+    reference: row.reference ?? undefined,
+    notes: row.notes ?? undefined,
+    customerName: customer?.full_name ?? undefined,
+    customerEmail: customer?.email ?? undefined,
+  };
+};
+
+const toTestimonial = (row: TestimonialRow): Testimonial => ({
+  id: row.id,
+  userId: row.user_id ?? '',
+  authorName: row.author_name ?? 'A seeker',
+  rating: row.rating ?? 5,
+  content: row.content ?? '',
+  status: asTestimonialStatus(row.status),
+  adminNote: row.admin_note ?? undefined,
+  createdAt: row.created_at ?? new Date().toISOString(),
+});
+
+const toNotification = (row: NotificationRow): AppNotification => ({
+  id: row.id,
+  title: row.title ?? 'Update',
+  body: row.body ?? '',
+  type: asNotificationType(row.type),
+  read: row.read ?? false,
+  createdAt: row.created_at ?? new Date().toISOString(),
+});
+
+/* ---------------------------------------------------------------- backend -- */
 
 export function createSupabaseBackend(): Backend {
   const client: SupabaseClient = createClient(config.supabaseUrl, config.supabaseAnonKey, {
@@ -105,314 +158,251 @@ export function createSupabaseBackend(): Backend {
     },
   });
 
-  function toProfile(row: ProfileRow): Profile {
-    return {
-      id: row.id,
-      email: row.email ?? '',
-      fullName: row.full_name ?? '',
-      phone: row.phone ?? '',
-      role: toRole(row.role),
-      createdAt: row.created_at ?? new Date().toISOString(),
-    };
-  }
+  async function loadProfile(user: User | null): Promise<Profile | null> {
+    if (!user) return null;
 
-  async function loadProfile(userId: string, email: string): Promise<Profile> {
-    // The signup trigger creates the profile row; allow a moment for it.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const { data, error } = await client
-        .from('profiles')
-        .select('id,email,full_name,phone,role,created_at')
-        .eq('id', userId)
-        .maybeSingle<ProfileRow>();
+    const { data, error } = await client
+      .from('profiles')
+      .select('id,email,full_name,phone,role,created_at')
+      .eq('id', user.id)
+      .maybeSingle<ProfileRow>();
 
-      if (error && error.code !== 'PGRST116') throw new Error(error.message);
-      if (data) return toProfile(data);
-      await new Promise((resolve) => setTimeout(resolve, 400));
+    if (error) throw new Error(error.message);
+
+    if (data) return toProfile(data);
+
+    // Safety net: if the `on_auth_user_created` trigger is not installed yet,
+    // create the caller's own profile row (role is forced to customer by RLS).
+    const { data: created, error: insertError } = await client
+      .from('profiles')
+      .insert({
+        id: user.id,
+        email: user.email ?? '',
+        full_name:
+          (user.user_metadata?.full_name as string | undefined) ??
+          (user.user_metadata?.name as string | undefined) ??
+          '',
+      })
+      .select('id,email,full_name,phone,role,created_at')
+      .single<ProfileRow>();
+
+    if (insertError) {
+      throw new Error(
+        `Could not load your profile (${insertError.message}). Run supabase/schema.sql in your Supabase project.`,
+      );
     }
-
-    // No profile row (schema trigger not installed yet). Stay usable, but with
-    // the least-privileged role so admin screens remain locked.
-    return {
-      id: userId,
-      email,
-      fullName: '',
-      phone: '',
-      role: 'customer',
-      createdAt: new Date().toISOString(),
-    };
-  }
-
-  async function getSession(): Promise<Profile | null> {
-    const { data, error } = await client.auth.getUser();
-    if (error || !data.user) return null;
-    return loadProfile(data.user.id, data.user.email ?? '');
-  }
-
-  async function requireProfile(): Promise<Profile> {
-    const profile = await getSession();
-    if (!profile) throw new Error('Please sign in to continue.');
-    return profile;
+    return toProfile(created);
   }
 
   async function requireAdmin(): Promise<Profile> {
-    const profile = await requireProfile();
-    if (profile.role !== 'admin') throw new Error('Administrator access required.');
+    const { data } = await client.auth.getSession();
+    const profile = await loadProfile(data.session?.user ?? null);
+    if (!profile || profile.role !== 'admin') {
+      throw new Error('Administrator access is required for this action.');
+    }
     return profile;
   }
 
-  const backend: Backend = {
-    mode: 'supabase',
+  return {
+    async getSession(): Promise<Profile | null> {
+      const { data, error } = await client.auth.getSession();
+      if (error) throw new Error(error.message);
+      return loadProfile(data.session?.user ?? null);
+    },
 
-    getSession,
-
-    onAuthStateChange(callback: (profile: Profile | null) => void): () => void {
-      const { data } = client.auth.onAuthStateChange((_event, session) => {
-        if (!session?.user) {
+    onAuthStateChange(callback) {
+      const { data } = client.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_OUT') {
           callback(null);
           return;
         }
-        const user = session.user;
-        void loadProfile(user.id, user.email ?? '').then(callback, () => callback(null));
+        if (!session?.user) return;
+        void loadProfile(session.user)
+          .then((profile) => callback(profile))
+          .catch(() => callback(null));
       });
-      return () => {
-        data.subscription.unsubscribe();
-      };
+      return () => data.subscription.unsubscribe();
     },
 
-    async signUpWithEmail(input): Promise<{ needsEmailConfirmation: boolean }> {
+    async signUpWithEmail({ email, password, fullName }) {
       const { data, error } = await client.auth.signUp({
-        email: input.email.trim(),
-        password: input.password,
+        email,
+        password,
         options: {
-          data: { full_name: input.fullName.trim() },
-          emailRedirectTo: `${window.location.origin}/login?confirmed=1`,
+          data: { full_name: fullName },
+          emailRedirectTo: redirectUrl('/auth/callback'),
         },
       });
       if (error) throw new Error(error.message);
       return { needsEmailConfirmation: !data.session };
     },
 
-    async signInWithEmail(input): Promise<void> {
-      const { error } = await client.auth.signInWithPassword({
-        email: input.email.trim(),
-        password: input.password,
-      });
+    async signInWithEmail({ email, password }) {
+      const { error } = await client.auth.signInWithPassword({ email, password });
       if (error) throw new Error(error.message);
     },
 
-    async signInWithGoogle(): Promise<void> {
+    async signInWithGoogle({ next } = {}) {
+      const target = new URL(redirectUrl('/auth/callback'));
+      if (next) target.searchParams.set('next', next);
       const { error } = await client.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: target.toString(),
           queryParams: { prompt: 'select_account' },
         },
       });
-      if (error) throw new Error(error.message);
+      if (error) {
+        throw new Error(
+          `${error.message} — make sure the Google provider is enabled in Supabase → Authentication → Providers.`,
+        );
+      }
     },
 
-    async signOut(): Promise<void> {
+    async signOut() {
       const { error } = await client.auth.signOut();
       if (error) throw new Error(error.message);
     },
 
-    async updateProfile(input): Promise<Profile> {
-      const profile = await requireProfile();
+    async requestPasswordReset(email) {
+      const { error } = await client.auth.resetPasswordForEmail(email, {
+        redirectTo: redirectUrl('/reset-password'),
+      });
+      if (error) throw new Error(error.message);
+    },
+
+    async updatePassword(password) {
+      const { error } = await client.auth.updateUser({ password });
+      if (error) throw new Error(error.message);
+    },
+
+    async updateProfile({ fullName, phone }) {
+      const { data: sessionData } = await client.auth.getSession();
+      const userId = sessionData.session?.user.id;
+      if (!userId) throw new Error('Please sign in again to continue.');
+
       const { data, error } = await client
         .from('profiles')
-        .update({ full_name: input.fullName.trim(), phone: input.phone.trim() })
-        .eq('id', profile.id)
+        .update({ full_name: fullName, phone })
+        .eq('id', userId)
         .select('id,email,full_name,phone,role,created_at')
         .single<ProfileRow>();
       if (error) throw new Error(error.message);
       return toProfile(data);
     },
 
-    async listBookings(): Promise<Booking[]> {
-      const profile = await requireProfile();
+    async listBookings() {
       const { data, error } = await client
         .from('bookings')
-        .select('id,user_id,customer_name,customer_email,service_name,scheduled_at,status,reference')
-        .eq('user_id', profile.id)
+        .select('id,user_id,service_name,scheduled_at,status,reference,notes')
         .order('scheduled_at', { ascending: false });
       if (error) throw new Error(error.message);
-      return (data ?? []).map((row) => {
-        const booking = row as BookingRow;
-        return {
-          id: booking.id,
-          serviceName: booking.service_name ?? 'Consultation',
-          scheduledAt: booking.scheduled_at ?? '',
-          status: toBookingStatus(booking.status),
-          reference: booking.reference ?? undefined,
-        };
-      });
+      return ((data ?? []) as BookingRow[]).map(toBooking);
     },
 
-    async listApprovedTestimonials(): Promise<Testimonial[]> {
+    async listApprovedTestimonials() {
       const { data, error } = await client
         .from('testimonials')
         .select('id,user_id,author_name,rating,content,status,admin_note,created_at')
         .eq('status', 'approved')
         .order('created_at', { ascending: false });
       if (error) throw new Error(error.message);
-      return (data ?? []).map((row) => {
-        const item = row as TestimonialRow;
-        return {
-          id: item.id,
-          userId: item.user_id ?? '',
-          authorName: item.author_name ?? 'Swayam Swasti guest',
-          rating: item.rating ?? 5,
-          content: item.content ?? '',
-          status: toTestimonialStatus(item.status),
-          createdAt: item.created_at ?? new Date().toISOString(),
-        };
-      });
+      return ((data ?? []) as TestimonialRow[]).map(toTestimonial);
     },
 
-    async listMyTestimonials(): Promise<Testimonial[]> {
-      const profile = await requireProfile();
+    async listMyTestimonials() {
       const { data, error } = await client
         .from('testimonials')
         .select('id,user_id,author_name,rating,content,status,admin_note,created_at')
-        .eq('user_id', profile.id)
         .order('created_at', { ascending: false });
       if (error) throw new Error(error.message);
-      return (data ?? []).map((row) => {
-        const item = row as TestimonialRow;
-        return {
-          id: item.id,
-          userId: item.user_id ?? '',
-          authorName: item.author_name ?? 'You',
-          rating: item.rating ?? 5,
-          content: item.content ?? '',
-          status: toTestimonialStatus(item.status),
-          adminNote: item.admin_note ?? undefined,
-          createdAt: item.created_at ?? new Date().toISOString(),
-        };
-      });
+      return ((data ?? []) as TestimonialRow[]).map(toTestimonial);
     },
 
-    async submitTestimonial(input): Promise<Testimonial> {
-      const profile = await requireProfile();
-      const authorName = profile.fullName.trim() || profile.email.split('@')[0] || 'Swayam Swasti guest';
+    async submitTestimonial({ rating, content }) {
+      const { data: sessionData } = await client.auth.getSession();
+      const userId = sessionData.session?.user.id;
+      if (!userId) throw new Error('Please sign in to share a testimonial.');
+
       const { data, error } = await client
         .from('testimonials')
-        .insert({
-          user_id: profile.id,
-          author_name: authorName,
-          rating: input.rating,
-          content: input.content.trim(),
-          status: 'pending',
-        })
+        .insert({ user_id: userId, rating, content })
         .select('id,user_id,author_name,rating,content,status,admin_note,created_at')
         .single<TestimonialRow>();
-
-      if (error) {
-        if (error.code === '23505') {
-          throw new Error('You already have a testimonial awaiting review. We will publish it shortly.');
-        }
-        throw new Error(error.message);
-      }
-
-      return {
-        id: data.id,
-        userId: data.user_id ?? profile.id,
-        authorName: data.author_name ?? authorName,
-        rating: data.rating ?? input.rating,
-        content: data.content ?? input.content.trim(),
-        status: toTestimonialStatus(data.status),
-        createdAt: data.created_at ?? new Date().toISOString(),
-      };
+      if (error) throw new Error(error.message);
+      return toTestimonial(data);
     },
 
-    async listNotifications(): Promise<AppNotification[]> {
-      const profile = await requireProfile();
+    async listNotifications() {
       const { data, error } = await client
         .from('notifications')
-        .select('id,title,body,type,read_at,created_at')
-        .eq('user_id', profile.id)
-        .order('created_at', { ascending: false });
+        .select('id,user_id,type,title,body,read,created_at')
+        .order('created_at', { ascending: false })
+        .limit(60);
       if (error) throw new Error(error.message);
-      return (data ?? []).map((row) => {
-        const item = row as NotificationRow;
-        return {
-          id: item.id,
-          title: item.title ?? 'Update',
-          body: item.body ?? '',
-          type: (item.type as AppNotification['type']) ?? 'system',
-          read: Boolean(item.read_at),
-          createdAt: item.created_at ?? new Date().toISOString(),
-        };
-      });
+      return ((data ?? []) as NotificationRow[]).map(toNotification);
     },
 
-    async markNotificationRead(id: string): Promise<void> {
+    async markNotificationRead(id) {
+      const { error } = await client.from('notifications').update({ read: true }).eq('id', id);
+      if (error) throw new Error(error.message);
+    },
+
+    async markAllNotificationsRead() {
+      const { data: sessionData } = await client.auth.getSession();
+      const userId = sessionData.session?.user.id;
+      if (!userId) return;
       const { error } = await client
         .from('notifications')
-        .update({ read_at: new Date().toISOString() })
-        .eq('id', id);
+        .update({ read: true })
+        .eq('user_id', userId)
+        .eq('read', false);
       if (error) throw new Error(error.message);
     },
 
-    async markAllNotificationsRead(): Promise<void> {
-      const profile = await requireProfile();
-      const { error } = await client
-        .from('notifications')
-        .update({ read_at: new Date().toISOString() })
-        .eq('user_id', profile.id)
-        .is('read_at', null);
-      if (error) throw new Error(error.message);
-    },
-
-    async listServices(): Promise<Service[]> {
+    async listServices() {
       const { data, error } = await client
         .from('services')
         .select('id,slug,title,summary,description,duration,price_label,highlights')
-        .eq('is_published', true)
-        .order('sort_order', { ascending: true });
+        .eq('published', true)
+        .order('position', { ascending: true });
       if (error) throw new Error(error.message);
-      return (data ?? []).map((row) => {
-        const item = row as ServiceRow;
-        return {
-          id: item.id,
-          slug: item.slug,
-          title: item.title,
-          summary: item.summary ?? '',
-          description: item.description ?? '',
-          duration: item.duration ?? '',
-          priceLabel: item.price_label ?? '',
-          highlights: item.highlights ?? [],
-        };
-      });
+      return ((data ?? []) as ServiceRow[]).map((row) => ({
+        id: row.id,
+        slug: row.slug,
+        title: row.title,
+        summary: row.summary ?? '',
+        description: row.description ?? '',
+        duration: row.duration ?? '',
+        priceLabel: row.price_label ?? '',
+        highlights: row.highlights ?? [],
+      }));
     },
 
-    async listGuidance(): Promise<GuidanceArticle[]> {
+    async listGuidance() {
       const { data, error } = await client
         .from('guidance_articles')
         .select('id,slug,title,excerpt,body,category,read_minutes')
-        .eq('is_published', true)
-        .order('sort_order', { ascending: true });
+        .eq('published', true)
+        .order('created_at', { ascending: false });
       if (error) throw new Error(error.message);
-      return (data ?? []).map((row) => {
-        const item = row as GuidanceRow;
-        return {
-          id: item.id,
-          slug: item.slug,
-          title: item.title,
-          excerpt: item.excerpt ?? '',
-          body: item.body ?? '',
-          category: item.category ?? 'Guidance',
-          readMinutes: item.read_minutes ?? 4,
-        };
-      });
+      return ((data ?? []) as GuidanceRow[]).map((row) => ({
+        id: row.id,
+        slug: row.slug,
+        title: row.title,
+        excerpt: row.excerpt ?? '',
+        body: row.body ?? '',
+        category: row.category ?? 'Guidance',
+        readMinutes: row.read_minutes ?? 4,
+      }));
     },
 
-    async getGuidanceArticle(slug: string): Promise<GuidanceArticle | null> {
+    async getGuidanceArticle(slug) {
       const { data, error } = await client
         .from('guidance_articles')
         .select('id,slug,title,excerpt,body,category,read_minutes')
         .eq('slug', slug)
-        .eq('is_published', true)
+        .eq('published', true)
         .maybeSingle<GuidanceRow>();
       if (error) throw new Error(error.message);
       if (!data) return null;
@@ -427,7 +417,9 @@ export function createSupabaseBackend(): Backend {
       };
     },
 
-    async adminListTestimonials(status: TestimonialStatus | 'all'): Promise<Testimonial[]> {
+    /* ----------------------------------------------------------- admin --- */
+
+    async adminListTestimonials(status) {
       await requireAdmin();
       let query = client
         .from('testimonials')
@@ -437,42 +429,65 @@ export function createSupabaseBackend(): Backend {
 
       const { data, error } = await query;
       if (error) throw new Error(error.message);
-      return (data ?? []).map((row) => {
-        const item = row as TestimonialRow;
-        return {
-          id: item.id,
-          userId: item.user_id ?? '',
-          authorName: item.author_name ?? 'Swayam Swasti guest',
-          rating: item.rating ?? 5,
-          content: item.content ?? '',
-          status: toTestimonialStatus(item.status),
-          adminNote: item.admin_note ?? undefined,
-          createdAt: item.created_at ?? new Date().toISOString(),
-        };
-      });
+      return ((data ?? []) as TestimonialRow[]).map(toTestimonial);
     },
 
-    async adminReviewTestimonial(input): Promise<void> {
+    async adminCreateTestimonial({ userId, authorName, rating, content, status, adminNote }) {
+      const admin = await requireAdmin();
+      const { error } = await client.from('testimonials').insert({
+        user_id: userId,
+        author_name: authorName.trim(),
+        rating,
+        content: content.trim(),
+        status,
+        admin_note: adminNote?.trim() || null,
+        reviewed_by: admin.id,
+        reviewed_at: new Date().toISOString(),
+      });
+      if (error) throw new Error(error.message);
+    },
+
+    async adminUpdateTestimonial({ id, authorName, rating, content, status, adminNote }) {
+      await requireAdmin();
+      const { error } = await client
+        .from('testimonials')
+        .update({
+          author_name: authorName.trim(),
+          rating,
+          content: content.trim(),
+          status,
+          admin_note: adminNote?.trim() || null,
+        })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+    },
+
+    async adminReviewTestimonial({ id, status, note }) {
       const admin = await requireAdmin();
       const { error } = await client
         .from('testimonials')
         .update({
-          status: input.status,
-          admin_note: input.note.trim() || null,
+          status,
+          admin_note: note.trim() || null,
           reviewed_by: admin.id,
           reviewed_at: new Date().toISOString(),
         })
-        .eq('id', input.id);
+        .eq('id', id);
       if (error) throw new Error(error.message);
     },
 
-    async adminListCustomers(): Promise<AdminCustomer[]> {
+    async adminDeleteTestimonial(id) {
+      await requireAdmin();
+      const { error } = await client.from('testimonials').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+    },
+
+    async adminListCustomers() {
       await requireAdmin();
       const [profilesResult, bookingsResult, testimonialsResult] = await Promise.all([
-        client
-          .from('profiles')
-          .select('id,email,full_name,phone,role,created_at')
-          .order('created_at', { ascending: false }),
+        client.from('profiles').select('id,email,full_name,phone,role,created_at').order('created_at', {
+          ascending: false,
+        }),
         client.from('bookings').select('user_id'),
         client.from('testimonials').select('user_id'),
       ]);
@@ -492,49 +507,88 @@ export function createSupabaseBackend(): Backend {
         if (id) testimonialCounts.set(id, (testimonialCounts.get(id) ?? 0) + 1);
       }
 
-      return ((profilesResult.data ?? []) as ProfileRow[]).map((row) => ({
+      return ((profilesResult.data ?? []) as ProfileRow[]).map<AdminCustomer>((row) => ({
         id: row.id,
         email: row.email ?? '',
         fullName: row.full_name ?? '',
         phone: row.phone ?? '',
+        role: asRole(row.role),
         createdAt: row.created_at ?? new Date().toISOString(),
         bookingCount: bookingCounts.get(row.id) ?? 0,
         testimonialCount: testimonialCounts.get(row.id) ?? 0,
       }));
     },
 
-    async adminListBookings(): Promise<Booking[]> {
+    async adminUpdateCustomer({ id, fullName, phone, role }) {
+      await requireAdmin();
+      const { error } = await client
+        .from('profiles')
+        .update({ full_name: fullName.trim(), phone: phone.trim(), role })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+    },
+
+    async adminListBookings() {
       await requireAdmin();
       const { data, error } = await client
         .from('bookings')
-        .select('id,user_id,customer_name,customer_email,service_name,scheduled_at,status,reference')
+        .select(
+          'id,user_id,service_name,scheduled_at,status,reference,notes,profiles(full_name,email)',
+        )
         .order('scheduled_at', { ascending: false });
       if (error) throw new Error(error.message);
-      return (data ?? []).map((row) => {
-        const booking = row as BookingRow;
+      return ((data ?? []) as BookingRow[]).map(toBooking);
+    },
+
+    async adminUpdateBooking({ id, status, scheduledAt }) {
+      await requireAdmin();
+      const patch: Record<string, unknown> = { status };
+      if (scheduledAt) patch.scheduled_at = scheduledAt;
+      const { error } = await client.from('bookings').update(patch).eq('id', id);
+      if (error) throw new Error(error.message);
+    },
+
+    async adminDeleteBooking(id) {
+      await requireAdmin();
+      const { error } = await client.from('bookings').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+    },
+
+    async adminListNotifications(limit = 50) {
+      await requireAdmin();
+      const { data, error } = await client
+        .from('notifications')
+        .select('id,user_id,type,title,body,read,created_at,profiles(full_name,email)')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw new Error(error.message);
+
+      return ((data ?? []) as NotificationRow[]).map<AdminNotification>((row) => {
+        const customer = embedded(row.profiles);
         return {
-          id: booking.id,
-          serviceName: booking.service_name ?? 'Consultation',
-          scheduledAt: booking.scheduled_at ?? '',
-          status: toBookingStatus(booking.status),
-          reference: booking.reference ?? undefined,
-          customerName: booking.customer_name ?? '',
-          customerEmail: booking.customer_email ?? '',
+          ...toNotification(row),
+          userId: row.user_id ?? '',
+          recipientName: customer?.full_name ?? '',
+          recipientEmail: customer?.email ?? '',
         };
       });
     },
 
-    async adminSendNotification(input): Promise<void> {
+    async adminSendNotification({ userId, title, body }) {
       await requireAdmin();
       const { error } = await client.from('notifications').insert({
-        user_id: input.userId,
-        title: input.title,
-        body: input.body,
+        user_id: userId,
+        title: title.trim(),
+        body: body.trim(),
         type: 'system',
       });
       if (error) throw new Error(error.message);
     },
-  };
 
-  return backend;
+    async adminDeleteNotification(id) {
+      await requireAdmin();
+      const { error } = await client.from('notifications').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+    },
+  };
 }

@@ -1,6 +1,6 @@
 /**
- * Domain types shared by both backends (Supabase and the local demo store).
- * The shape mirrors the SQL schema in `supabase/schema.sql`.
+ * Domain types shared by the app and the Supabase schema
+ * (`supabase/schema.sql`). Every value here comes from a real database row.
  */
 
 export type Role = 'customer' | 'admin';
@@ -49,6 +49,13 @@ export interface AppNotification {
   createdAt: string;
 }
 
+/** Administrator view of a notification, including its recipient. */
+export interface AdminNotification extends AppNotification {
+  userId: string;
+  recipientName: string;
+  recipientEmail: string;
+}
+
 export interface Service {
   id: string;
   slug: string;
@@ -75,6 +82,7 @@ export interface AdminCustomer {
   email: string;
   fullName: string;
   phone: string;
+  role: Role;
   createdAt: string;
   bookingCount: number;
   testimonialCount: number;
