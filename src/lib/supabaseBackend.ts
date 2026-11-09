@@ -259,7 +259,7 @@ export function createSupabaseBackend(): Backend {
         const item = row as TestimonialRow;
         return {
           id: item.id,
-          userId: item.user_id ?? undefined,
+          userId: item.user_id ?? '',
           authorName: item.author_name ?? 'Swayam Swasti guest',
           rating: item.rating ?? 5,
           content: item.content ?? '',
@@ -281,7 +281,7 @@ export function createSupabaseBackend(): Backend {
         const item = row as TestimonialRow;
         return {
           id: item.id,
-          userId: item.user_id ?? undefined,
+          userId: item.user_id ?? '',
           authorName: item.author_name ?? 'You',
           rating: item.rating ?? 5,
           content: item.content ?? '',
@@ -441,7 +441,7 @@ export function createSupabaseBackend(): Backend {
         const item = row as TestimonialRow;
         return {
           id: item.id,
-          userId: item.user_id ?? undefined,
+          userId: item.user_id ?? '',
           authorName: item.author_name ?? 'Swayam Swasti guest',
           rating: item.rating ?? 5,
           content: item.content ?? '',

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useToast } from '../components/Toast';
-import { Field, Icon, Loading } from '../components/ui';
+import { Field, Icon } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { getBackend, isDemoBackend } from '../lib/backend';
 import { validateEmail } from '../lib/validation';

@@ -31,7 +31,9 @@ export default function Profile() {
 
   async function handleSave(event: React.FormEvent) {
     event.preventDefault();
-    const nextErrors = validateFullName(fullName);
+    const nextErrors: FieldErrors = {};
+    const nameError = validateFullName(fullName);
+    if (nameError) nextErrors.fullName = nameError;
     setErrors(nextErrors);
     if (hasErrors(nextErrors)) return;
 

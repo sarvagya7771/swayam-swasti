@@ -28,11 +28,13 @@ export default function Signup() {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    const nextErrors = {
-      ...validateFullName(fullName),
-      ...validateEmail(email),
-      ...validatePassword(password),
-    };
+    const nextErrors: FieldErrors = {};
+    const nameError = validateFullName(fullName);
+    if (nameError) nextErrors.fullName = nameError;
+    const emailError = validateEmail(email);
+    if (emailError) nextErrors.email = emailError;
+    const passwordError = validatePassword(password);
+    if (passwordError) nextErrors.password = passwordError;
     setErrors(nextErrors);
     if (hasErrors(nextErrors)) return;
 
