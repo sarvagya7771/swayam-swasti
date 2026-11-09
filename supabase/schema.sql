@@ -59,7 +59,7 @@ create index if not exists bookings_user_id_idx on public.bookings (user_id, sch
 -- --------------------------------------------------------- testimonials ----
 create table if not exists public.testimonials (
   id           uuid primary key default gen_random_uuid(),
-  user_id      uuid not null references public.profiles (id) on delete cascade,
+  user_id      uuid references public.profiles (id) on delete cascade,
   author_name  text not null default '',
   rating       smallint not null check (rating between 1 and 5),
   content      text not null check (char_length(content) between 20 and 1200),
@@ -218,6 +218,15 @@ set search_path = public
 as $$
 begin
   if tg_op = 'INSERT' then
+    -- Administrators may create an entry directly (for example a testimonial
+    -- collected offline). They choose the status and the display name.
+    if public.is_admin() then
+      new.author_name := coalesce(nullif(trim(new.author_name), ''), 'Swayam Swasti client');
+      new.reviewed_by := auth.uid();
+      new.reviewed_at := now();
+      return new;
+    end if;
+
     -- A customer submission is always pending; the author name is derived
     -- server-side so clients cannot impersonate someone else.
     new.status := 'pending';
@@ -318,7 +327,7 @@ create policy testimonials_public_read on public.testimonials
 
 drop policy if exists testimonials_insert_own on public.testimonials;
 create policy testimonials_insert_own on public.testimonials
-  for insert with check (user_id = auth.uid());
+  for insert with check (user_id = auth.uid() or public.is_admin());
 
 drop policy if exists testimonials_update_own on public.testimonials;
 create policy testimonials_update_own on public.testimonials
@@ -341,6 +350,10 @@ create policy notifications_update_own on public.notifications
 drop policy if exists notifications_insert_admin on public.notifications;
 create policy notifications_insert_admin on public.notifications
   for insert with check (public.is_admin());
+
+drop policy if exists notifications_delete_admin on public.notifications;
+create policy notifications_delete_admin on public.notifications
+  for delete using (public.is_admin());
 
 -- public content
 drop policy if exists services_public_read on public.services;
