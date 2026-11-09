@@ -1,8 +1,8 @@
 import { isSupabaseConfigured } from './config';
-import { createDemoBackend } from './demoBackend';
 import { createSupabaseBackend } from './supabaseBackend';
 import type {
   AdminCustomer,
+  AdminNotification,
   AppNotification,
   Booking,
   BookingStatus,
@@ -14,28 +14,27 @@ import type {
   TestimonialStatus,
 } from './types';
 
-/** Demo-only helpers. Absent when a real Supabase project is connected. */
-export interface DemoControls {
-  setRole(role: Role): Promise<Profile>;
-  resetDemoData(): Promise<void>;
-  simulateBookingUpdate(input: { userId: string; serviceName: string; status: BookingStatus }): Promise<void>;
-}
-
 /**
- * Everything the UI needs from a backend. Two implementations exist:
- *  - `supabaseBackend`  → real project, protected by Row Level Security
- *  - `demoBackend`      → browser-local store, used when no keys are configured
+ * Everything the UI needs from the database.
+ *
+ * There is exactly one implementation: `supabaseBackend`, backed by a real
+ * Supabase project. There is no browser-local store, so nothing the app shows
+ * can be mistaken for real data that was never saved.
  */
 export interface Backend {
-  readonly mode: 'supabase' | 'demo';
-
   getSession(): Promise<Profile | null>;
   onAuthStateChange(callback: (profile: Profile | null) => void): () => void;
 
-  signUpWithEmail(input: { email: string; password: string; fullName: string }): Promise<{ needsEmailConfirmation: boolean }>;
+  signUpWithEmail(input: {
+    email: string;
+    password: string;
+    fullName: string;
+  }): Promise<{ needsEmailConfirmation: boolean }>;
   signInWithEmail(input: { email: string; password: string }): Promise<void>;
-  signInWithGoogle(): Promise<void>;
+  signInWithGoogle(input?: { next?: string }): Promise<void>;
   signOut(): Promise<void>;
+  requestPasswordReset(email: string): Promise<void>;
+  updatePassword(password: string): Promise<void>;
 
   updateProfile(input: { fullName: string; phone: string }): Promise<Profile>;
 
@@ -52,22 +51,66 @@ export interface Backend {
   listGuidance(): Promise<GuidanceArticle[]>;
   getGuidanceArticle(slug: string): Promise<GuidanceArticle | null>;
 
-  adminListTestimonials(status: TestimonialStatus | 'all'): Promise<Testimonial[]>;
-  adminReviewTestimonial(input: { id: string; status: 'approved' | 'rejected'; note: string }): Promise<void>;
-  adminListCustomers(): Promise<AdminCustomer[]>;
-  adminListBookings(): Promise<Booking[]>;
-  adminSendNotification(input: { userId: string; title: string; body: string }): Promise<void>;
+  /* ------------------------------------------------------------- admin --- */
 
-  demo?: DemoControls;
+  adminListTestimonials(status: TestimonialStatus | 'all'): Promise<Testimonial[]>;
+  adminCreateTestimonial(input: {
+    userId: string | null;
+    authorName: string;
+    rating: number;
+    content: string;
+    status: TestimonialStatus;
+    adminNote?: string;
+  }): Promise<void>;
+  adminUpdateTestimonial(input: {
+    id: string;
+    authorName: string;
+    rating: number;
+    content: string;
+    status: TestimonialStatus;
+    adminNote?: string;
+  }): Promise<void>;
+  adminReviewTestimonial(input: {
+    id: string;
+    status: Extract<TestimonialStatus, 'approved' | 'rejected'>;
+    note: string;
+  }): Promise<void>;
+  adminDeleteTestimonial(id: string): Promise<void>;
+
+  adminListCustomers(): Promise<AdminCustomer[]>;
+  adminUpdateCustomer(input: {
+    id: string;
+    fullName: string;
+    phone: string;
+    role: Role;
+  }): Promise<void>;
+
+  adminListBookings(): Promise<Booking[]>;
+  adminUpdateBooking(input: {
+    id: string;
+    status: BookingStatus;
+    scheduledAt?: string;
+  }): Promise<void>;
+  adminDeleteBooking(id: string): Promise<void>;
+
+  adminListNotifications(limit?: number): Promise<AdminNotification[]>;
+  adminSendNotification(input: { userId: string; title: string; body: string }): Promise<void>;
+  adminDeleteNotification(id: string): Promise<void>;
 }
 
 let cached: Backend | null = null;
 
+/**
+ * Returns the Supabase-backed client. Throws a clear, actionable error when the
+ * project has not been configured yet — the UI shows a setup screen before any
+ * page calls this, so the error is a safety net rather than a normal path.
+ */
 export function getBackend(): Backend {
-  if (!cached) {
-    cached = isSupabaseConfigured ? createSupabaseBackend() : createDemoBackend();
+  if (!isSupabaseConfigured) {
+    throw new Error(
+      'Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then rebuild the app.',
+    );
   }
+  if (!cached) cached = createSupabaseBackend();
   return cached;
 }
-
-export const isDemoBackend = (): boolean => getBackend().mode === 'demo';
