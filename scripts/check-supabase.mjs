@@ -12,6 +12,10 @@
  * 4. If the URL is valid, performs a single reachability check against the
  *    Supabase Auth health endpoint, then one read against `public.profiles`
  *    to confirm the database schema has actually been applied.
+ * 5. Reports which of this app's own tables already exist, so you can tell a
+ *    DEDICATED project (none exist yet — schema.sql is safe) from a SHARED one
+ *    (another app already owns a table with the same name — use
+ *    schema_safe.sql or a separate project).
  *
  * Exit codes: 0 = configuration usable, 1 = problems found.
  * The key is always masked in output; values are never printed in full.
@@ -209,6 +213,29 @@ async function probe(path, label, expectTable) {
   }
 }
 
+// Is one of this app's tables present? PGRST205 / "schema cache" means the
+// table genuinely does not exist; a 200 with [] means it exists and RLS simply
+// returned no rows for an anonymous request.
+async function tableState(table) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(`${url}/rest/v1/${table}?select=*&limit=1`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+      signal: controller.signal,
+    });
+    const body = await response.text();
+    if (response.status === 404 && /PGRST205|schema cache|does not exist/i.test(body)) return 'missing';
+    if (response.ok) return 'exists';
+    if (response.status === 401 || response.status === 403) return 'denied';
+    return 'unknown';
+  } catch {
+    return 'error';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 if (urlUsable && keyUsable) {
   console.log('\nLive connection');
   console.log('──────────────────────────────────────────────');
@@ -223,6 +250,46 @@ if (urlUsable && keyUsable) {
     'Database schema applied',
     'profiles',
   );
+
+  // ---------------------------------------------------- project scope ------
+  // schema.sql may only be run on a project dedicated to this customer app.
+  // If another application already owns a table with one of these names, the
+  // script would enable RLS on that table and silently skip creating it.
+  const APP_TABLES = [
+    'profiles',
+    'bookings',
+    'testimonials',
+    'notifications',
+    'services',
+    'guidance_articles',
+  ];
+
+  console.log('\nProject scope');
+  console.log('──────────────────────────────────────────────');
+
+  const states = {};
+  for (const table of APP_TABLES) states[table] = await tableState(table);
+
+  const present = APP_TABLES.filter((t) => states[t] === 'exists');
+  const absent = APP_TABLES.filter((t) => states[t] === 'missing');
+  const unknown = APP_TABLES.filter((t) => !['exists', 'missing'].includes(states[t]));
+
+  console.log(`  checked ${APP_TABLES.length} app tables: ${absent.length} absent, ${present.length} present${unknown.length ? `, ${unknown.length} inconclusive` : ''}`);
+  if (present.length) console.log(`  present: ${present.join(', ')}`);
+  if (unknown.length) console.log(`  inconclusive: ${unknown.map((t) => `${t} (${states[t]})`).join(', ')}`);
+
+  if (!present.length && absent.length === APP_TABLES.length) {
+    console.log('  ok    none of this app\'s tables exist yet.');
+    console.log('        → This project holds no data these tables would collide with.');
+    console.log('        → schema.sql is safe here IF the project is dedicated (see README).');
+  } else if (present.length) {
+    console.log('  warn  this project already contains tables with these names.');
+    console.log('        → It may be shared with another application.');
+    console.log('        → Use supabase/schema_safe.sql (aborts instead of overwriting) or a dedicated project.');
+  } else {
+    console.log('  warn  could not determine whether these tables exist.');
+    console.log('        → Confirm in Supabase → Table Editor before running schema.sql.');
+  }
 
   console.log('');
   if (auth.ok && schema.ok) {
